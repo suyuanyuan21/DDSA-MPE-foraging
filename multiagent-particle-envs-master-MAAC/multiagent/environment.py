@@ -2,6 +2,7 @@ import gym
 from gym import spaces
 from gym.envs.registration import EnvSpec
 import numpy as np
+import math
 
 # environment for all agents in the multiagent world
 # currently code assumes that no agents will be created/destroyed at runtime!
@@ -88,6 +89,7 @@ class MultiAgentEnv(gym.Env):
         info_n = {'n': []}
         self.agents = self.world.policy_agents
         # set action for each agent
+        #print("action_n:",action_n)
         for i, agent in enumerate(self.agents):
             self._set_action(action_n[i], agent, self.action_space[i])
         # advance world state
@@ -153,16 +155,7 @@ class MultiAgentEnv(gym.Env):
         #agent.action.u = array([0.,0.])
         agent.action.c = np.zeros(self.world.dim_c)
         # process action
-        if isinstance(action_space, spaces.MultiDiscrete):
-            act = []
-            size = action_space.high - action_space.low + 1
-            index = 0
-            for s in size:
-                act.append(action[index:(index+s)])
-                index += s
-            action = act
-        else:
-            action = [action]
+        action = [action]
         #print("now_action:",action)
         #now_action: [array([0., 0., 0., 1., 0.], dtype=float32)]
 
@@ -170,23 +163,53 @@ class MultiAgentEnv(gym.Env):
             # physical action
             if self.discrete_action_input:
                 agent.action.u = np.zeros(self.world.dim_p)
-                # process discrete action
-                #print("discrete_action[0]:",action[0])
-                if action[0] == 1: agent.action.u[0] = -1.0
-                if action[0] == 2: agent.action.u[0] = +1.0
-                if action[0] == 3: agent.action.u[1] = -1.0
-                if action[0] == 4: agent.action.u[1] = +1.0
             else:
-                #print("action[0]:",action[0])
-                #action[0]: [0. 0. 0. 1. 0.]
-                if self.force_discrete_action:
-                    d = np.argmax(action[0])
-                    action[0][:] = 0.0
-                    action[0][d] = 1.0
+                #print("action[0]:",action[0][0])
+                #action[0]: [[ 0.  1.],[-1.  0.],[ 0. -1.],[ 1.  0.]]
                 if self.discrete_action_space:
-                    #True,action[0]: [0. 0. 0. 1. 0.]
-                    agent.action.u[0] += action[0][1] - action[0][2]
-                    agent.action.u[1] += action[0][3] - action[0][4]
+                    #True
+                    #print("turn_n:",self.turn_n)
+                    #print("agent.i:",agent.i)
+                    #print("agent%d t_i:"%agent.i,self.t_i[agent.i])
+                    if(agent.holding == None and agent.recover):
+                        if(agent.turn_n == 0):
+                            if(agent.t_i == (agent.turn_n+1)*6+agent.i):
+                                agent.turn_n += 1
+                        elif(agent.turn_n <= 2):
+                            if(agent.t_i == (agent.turn_n+1)*6+agent.i+2*agent.turn_n*agent.i):
+                                agent.turn_n += 1
+                        elif (agent.turn_n % 2 == 1):
+                            if(agent.t_i == ((agent.turn_n+1)*6+agent.i+(((agent.turn_n-1)**2/4)*3)+2*agent.turn_n*agent.i)):
+                                agent.turn_n += 1
+                        else:
+                            if(agent.t_i == ((agent.turn_n+1)*6+agent.i+(agent.turn_n/2-1)*(agent.turn_n/2)*3+2*agent.turn_n*agent.i)):
+                                agent.turn_n += 1
+                        agent.t_i += 1
+                        agent.action.u += action[0][(agent.turn_n%4)]
+                    elif (agent.holding == None and not agent.recover):
+                        #print("linalg:",np.linalg.norm(agent.state.rep_pos))
+                        agent.action.u += np.array([(agent.state.rep_pos[0]/np.linalg.norm(agent.state.rep_pos))
+                                                   ,(agent.state.rep_pos[1]/np.linalg.norm(agent.state.rep_pos))])
+                        if((math.fabs(agent.state.p_pos[0] - agent.state.rep_pos[0]) < 0.0000001) and 
+                            (math.fabs(agent.state.p_pos[1] - agent.state.rep_pos[1]) < 0.0000001)):
+                            agent.state.rep_pos = np.zeros(self.world.dim_p)
+                            agent.recover = True
+                        #print("agent%d.state.rep_pos:"%agent.i,agent.state.rep_pos)
+                        #print("agent%d.state.p_pos:"%agent.i,agent.state.p_pos)
+                    else:
+                        #self.turn_n[agent.i] = 0
+                        if(agent.recover):
+                            agent.state.rep_pos = np.zeros(self.world.dim_p)
+                            agent.state.rep_pos += agent.state.p_pos
+                            agent.recover = False
+                        #print("agent%d.state.rep_pos:"%agent.i,agent.state.rep_pos)
+                        #print("agent%d.state.p_pos:"%agent.i,agent.state.p_pos)
+                        agent.action.u -= np.array([(agent.state.rep_pos[0]/np.linalg.norm(agent.state.rep_pos))
+                                                   ,(agent.state.rep_pos[1]/np.linalg.norm(agent.state.rep_pos))])
+
+                    
+                    #print("agent.action.u:",agent.action.u)
+                    #agent.action.u += action[0][0]
                 else:
                     agent.action.u = action[0]
             sensitivity = 5.0
@@ -200,14 +223,6 @@ class MultiAgentEnv(gym.Env):
             #print("new_action:",action)
             #new_action: []
 
-        if not agent.silent:
-            # communication action
-            if self.discrete_action_input:
-                agent.action.c = np.zeros(self.world.dim_c)
-                agent.action.c[action[0]] = 1.0
-            else:
-                agent.action.c = action[0]
-            action = action[1:]
         # make sure we used all elements of action
         assert len(action) == 0
 

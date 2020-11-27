@@ -6,6 +6,7 @@ class EntityState(object):
     def __init__(self):
         # physical position p_pos = [0.0,0.0]
         self.p_pos = None
+        self.rep_pos = None
         # physical velocity p_vel = [0.0,0.0]
         self.p_vel = None
 
@@ -100,6 +101,9 @@ class Agent(Entity):
         self.action = Action()
         # script behavior to execute
         self.action_callback = None
+        self.recover = True
+        self.turn_n = 0
+        self.t_i = 0
 
 # multi-agent world
 class World(object):
@@ -142,6 +146,7 @@ class World(object):
         return [agent for agent in self.agents if agent.action_callback is not None]
 
     def calculate_distances(self):
+        #把各个元素之间的距离写进一个矩阵
         if self.cached_dist_vect is None:
             # initialize distance data structure
             self.cached_dist_vect = np.zeros((len(self.entities),
@@ -191,8 +196,6 @@ class World(object):
         p_force = [None] * len(self.entities)
         # apply agent physical controls
         p_force = self.apply_action_force(p_force)
-        # apply environment forces
-        p_force = self.apply_environment_force(p_force)
         # integrate physical state
         self.integrate_state(p_force)
         # update agent state
@@ -209,30 +212,8 @@ class World(object):
         for i,agent in enumerate(self.agents):
             if agent.movable:
                 noise = np.random.randn(*agent.action.u.shape) * agent.u_noise if agent.u_noise else 0.0
+                #print("agent_action:",agent.action.u)
                 p_force[i] = (agent.mass * agent.accel if agent.accel is not None else agent.mass) * agent.action.u + noise
-        #print("p_force:",p_force)
-        return p_force
-
-    # gather physical forces acting on entities
-    def apply_environment_force(self, p_force):
-        # simple (but inefficient) collision response
-        for a,entity_a in enumerate(self.entities):
-            for b,entity_b in enumerate(self.entities):
-                if(b <= a): continue
-                [f_a, f_b] = self.get_entity_collision_force(a, b)
-                if(f_a is not None):
-                    if(p_force[a] is None): p_force[a] = 0.0
-                    p_force[a] = f_a + p_force[a] 
-                if(f_b is not None):
-                    if(p_force[b] is None): p_force[b] = 0.0
-                    p_force[b] = f_b + p_force[b]
-            if entity_a.movable:
-                for wall in self.walls:
-                    wf = self.get_wall_collision_force(entity_a, wall)
-                    if wf is not None:
-                        if p_force[a] is None:
-                            p_force[a] = 0.0
-                        p_force[a] = p_force[a] + wf
         #print("p_force:",p_force)
         return p_force
 
@@ -248,14 +229,10 @@ class World(object):
             if (p_force[i] is not None):
                 #print("entity.mass:",entity.mass)
                 #entity.mass = 1.0
-                entity.state.p_vel += (p_force[i] / entity.mass) * self.dt
-                #entity.state.p_vel = (p_force[i] / entity.mass) * self.dt
-                #print("entity.state.p_vel:",entity.state.p_vel)
-            if entity.max_speed is not None:
-                speed = np.sqrt(np.square(entity.state.p_vel[0]) + np.square(entity.state.p_vel[1]))
-                if speed > entity.max_speed:
-                    entity.state.p_vel = entity.state.p_vel / np.sqrt(np.square(entity.state.p_vel[0]) +
-                                                                  np.square(entity.state.p_vel[1])) * entity.max_speed
+                #entity.state.p_vel += (p_force[i] / entity.mass) * self.dt
+                entity.state.p_vel = (p_force[i] / entity.mass) * self.dt
+                
+            #print("p_vel:",entity.state.p_vel* self.dt)
             entity.state.p_pos += entity.state.p_vel * self.dt
 
     def update_agent_state(self, agent):
@@ -265,77 +242,3 @@ class World(object):
         else:
             noise = np.random.randn(*agent.action.c.shape) * agent.c_noise if agent.c_noise else 0.0
             agent.state.c = agent.action.c + noise      
-
-    # get collision forces for any contact between two entities
-    def get_entity_collision_force(self, ia, ib):
-        entity_a = self.entities[ia]
-        entity_b = self.entities[ib]
-        if (not entity_a.collide) or (not entity_b.collide):
-            return [None, None] # not a collider
-        if (not entity_a.movable) and (not entity_b.movable):
-            return [None, None] # neither entity moves
-        if (entity_a is entity_b):
-            return [None, None] # don't collide against itself
-        if self.cache_dists:
-            delta_pos = self.cached_dist_vect[ia, ib]
-            dist = self.cached_dist_mag[ia, ib]
-            dist_min = self.min_dists[ia, ib]
-        else:
-            # compute actual distance between entities
-            delta_pos = entity_a.state.p_pos - entity_b.state.p_pos
-            dist = np.sqrt(np.sum(np.square(delta_pos)))
-            # minimum allowable distance
-            dist_min = entity_a.size + entity_b.size
-        # softmax penetration
-        k = self.contact_margin
-        penetration = np.logaddexp(0, -(dist - dist_min)/k)*k
-        force = self.contact_force * delta_pos / dist * penetration
-        if entity_a.movable and entity_b.movable:
-            # consider mass in collisions
-            force_ratio = entity_b.mass / entity_a.mass
-            force_a = force_ratio * force
-            force_b = -(1 / force_ratio) * force
-        else:
-            force_a = +force if entity_a.movable else None
-            force_b = -force if entity_b.movable else None
-        return [force_a, force_b]
-
-    # get collision forces for contact between an entity and a wall
-    def get_wall_collision_force(self, entity, wall):
-        if entity.ghost and not wall.hard:
-            return None  # ghost passes through soft walls
-        if wall.orient == 'H':
-            prll_dim = 0
-            perp_dim = 1
-        else:
-            prll_dim = 1
-            perp_dim = 0
-        ent_pos = entity.state.p_pos
-        if (ent_pos[prll_dim] < wall.endpoints[0] - entity.size or
-            ent_pos[prll_dim] > wall.endpoints[1] + entity.size):
-            return None  # entity is beyond endpoints of wall
-        elif (ent_pos[prll_dim] < wall.endpoints[0] or
-              ent_pos[prll_dim] > wall.endpoints[1]):
-            # part of entity is beyond wall
-            if ent_pos[prll_dim] < wall.endpoints[0]:
-                dist_past_end = ent_pos[prll_dim] - wall.endpoints[0]
-            else:
-                dist_past_end = ent_pos[prll_dim] - wall.endpoints[1]
-            theta = np.arcsin(dist_past_end / entity.size)
-            dist_min = np.cos(theta) * entity.size + 0.5 * wall.width
-        else:  # entire entity lies within bounds of wall
-            theta = 0
-            dist_past_end = 0
-            dist_min = entity.size + 0.5 * wall.width
-
-        # only need to calculate distance in relevant dim
-        delta_pos = ent_pos[perp_dim] - wall.axis_pos
-        dist = np.abs(delta_pos)
-        # softmax penetration
-        k = self.contact_margin
-        penetration = np.logaddexp(0, -(dist - dist_min)/k)*k
-        force_mag = self.contact_force * delta_pos / dist * penetration
-        force = np.zeros(2)
-        force[perp_dim] = np.cos(theta) * force_mag
-        force[prll_dim] = np.sin(theta) * np.abs(force_mag)
-        return force

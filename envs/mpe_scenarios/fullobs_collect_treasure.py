@@ -34,8 +34,11 @@ class Scenario(BaseScenario):
             agent.silent = True
             agent.ghost = True
             agent.holding = None
+            agent.recover = True
+            agent.t_i = 0
+            agent.turn_n = 0
             agent.size = 0.017 if agent.collector else 0.1
-            agent.accel = 1.5
+            agent.accel = 1.844
             agent.initial_mass = 1.0 if agent.collector else 2.25
             agent.max_speed = 1.0
         # add treasures
@@ -74,28 +77,20 @@ class Scenario(BaseScenario):
         for l in world.landmarks:
             if l.alive:
                 for a in self.collectors(world):
-                    if a.holding is None and self.is_collision(l, a, world):
+                    if a.holding is None and self.is_collision(l, a, world) and a.recover:
                         l.alive = False
                         a.holding = l.type
                         a.color = 0.85 * l.color
                         l.state.p_pos = np.array([-999., -999.])
                         break
-            '''
-            else:
-                if np.random.uniform() <= l.respawn_prob:
-                    bound = 0.95
-                    l.state.p_pos = np.random.uniform(low=-bound, high=bound,
-                                                      size=world.dim_p)
-                    l.type = np.random.choice(world.treasure_types)
-                    l.color = world.treasure_colors[l.type]
-                    l.alive = True
-            '''
+
         for a in self.collectors(world):
             if a.holding is not None:
                 for d in self.deposits(world):
                     if d.d_i == a.holding and self.is_collision(a, d, world):
                         a.holding = None
                         a.color = np.array([0.85, 0.85, 0.85])
+                        #a.state.p_pos = np.array([a.size*(2*a.i + 1) + 0.1,-0.1])
 
     def reset_world(self, world):
         print("forage_num:",world.forage_num)
@@ -107,10 +102,15 @@ class Scenario(BaseScenario):
             agent.state.p_vel = np.zeros(world.dim_p)
             agent.state.c = np.zeros(world.dim_c)
             agent.holding = None
+            agent.recover = True
+            agent.t_i = 0
+            agent.turn_n = 0
             if agent.collector:
                 agent.color = np.array([0.85, 0.85, 0.85])
-                agent.state.p_pos = np.random.uniform(low=-0.5, high=0.5,
-                                                  size=world.dim_p)
+                #agent.state.p_pos = np.random.uniform(low=-0.5, high=0.5,
+                #                                  size=world.dim_p)
+                agent.state.p_pos = np.array([agent.size*(2*i + 1) + 0.1,-0.1])
+                #0.1 是deposit的size
             else:
                 agent.state.p_pos = np.array([0.0,0.0])
         for i, landmark in enumerate(world.landmarks):
